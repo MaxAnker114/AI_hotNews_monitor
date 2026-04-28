@@ -10,6 +10,8 @@ export const DEFAULT_SOURCES: SourceType[] = [
 ];
 
 const MAX_WEB_RESULTS = 30;
+const MAX_PER_SOURCE = 12;
+const MAX_AGE_DAYS = 60;
 const USER_AGENT = "ai-hotnews-detect/1.0";
 
 export async function fetchBySources(query: string, sources: SourceType[]): Promise<CandidateItem[]> {
@@ -30,7 +32,7 @@ export async function fetchBySources(query: string, sources: SourceType[]): Prom
 
 async function searchHackerNews(query: string): Promise<CandidateItem[]> {
   try {
-    const endpoint = `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(query)}&tags=story&hitsPerPage=12`;
+    const endpoint = `https://hn.algolia.com/api/v1/search_by_date?query=${encodeURIComponent(query)}&tags=story&hitsPerPage=${MAX_PER_SOURCE}`;
     const response = await fetch(endpoint, {
       headers: { "User-Agent": USER_AGENT },
       next: { revalidate: 300 },
@@ -60,9 +62,10 @@ async function searchHackerNews(query: string): Promise<CandidateItem[]> {
         url: item.url || "",
         source: "hackernews" as const,
         sourceId: item.objectID,
-        publishedAt: item.created_at,
+        publishedAt: normalizeDate(item.created_at),
         scoreHint: Math.min(100, Math.round((item.points || 0) * 0.8 + (item.num_comments || 0) * 1.5)),
-      }));
+      }))
+      .filter((item) => isFresh(item.publishedAt));
   } catch {
     return [];
   }
@@ -70,7 +73,7 @@ async function searchHackerNews(query: string): Promise<CandidateItem[]> {
 
 async function searchReddit(query: string): Promise<CandidateItem[]> {
   try {
-    const endpoint = `https://www.reddit.com/search.json?q=${encodeURIComponent(query)}&sort=hot&limit=12&t=day&raw_json=1`;
+    const endpoint = `https://www.reddit.com/search.json?q=${encodeURIComponent(query)}&sort=hot&limit=${MAX_PER_SOURCE}&t=month&raw_json=1`;
     const response = await fetch(endpoint, {
       headers: { "User-Agent": USER_AGENT },
       next: { revalidate: 300 },
@@ -107,7 +110,8 @@ async function searchReddit(query: string): Promise<CandidateItem[]> {
         sourceId: item?.id,
         publishedAt: item?.created_utc ? new Date(item.created_utc * 1000).toISOString() : undefined,
         scoreHint: Math.min(100, Math.round((item?.score || 0) * 0.5 + (item?.num_comments || 0) * 1.2)),
-      }));
+      }))
+      .filter((item) => isFresh(item.publishedAt));
   } catch {
     return [];
   }
@@ -115,7 +119,9 @@ async function searchReddit(query: string): Promise<CandidateItem[]> {
 
 async function searchGithub(query: string): Promise<CandidateItem[]> {
   try {
-    const endpoint = `https://api.github.com/search/repositories?q=${encodeURIComponent(`${query} in:name,description`)}&sort=stars&order=desc&per_page=12&page=1`;
+    const since = formatDateForQuery(daysAgo(MAX_AGE_DAYS));
+    const scopedQuery = `${query} in:name,description pushed:>${since}`;
+    const endpoint = `https://api.github.com/search/repositories?q=${encodeURIComponent(scopedQuery)}&sort=stars&order=desc&per_page=${MAX_PER_SOURCE}&page=1`;
 
     const response = await fetch(endpoint, {
       headers: {
@@ -150,9 +156,10 @@ async function searchGithub(query: string): Promise<CandidateItem[]> {
         url: item.html_url || "",
         source: "github" as const,
         sourceId: String(item.id || ""),
-        publishedAt: item.updated_at,
+        publishedAt: normalizeDate(item.updated_at),
         scoreHint: Math.min(100, Math.round((item.stargazers_count || 0) / 20 + (item.forks_count || 0) / 8)),
-      }));
+      }))
+      .filter((item) => isFresh(item.publishedAt));
   } catch {
     return [];
   }
@@ -229,23 +236,26 @@ async function searchTwitter(query: string): Promise<CandidateItem[]> {
       }>;
     };
 
-    return (json.tweets || []).slice(0, 20).map((item) => ({
-      title: (item.text || "").slice(0, 80) || "Twitter",
-      content: item.text || "",
-      url: item.url || "",
-      source: "twitter" as const,
-      sourceId: item.id,
-      publishedAt: normalizeDate(item.createdAt),
-      scoreHint: Math.min(
-        100,
-        Math.round(
-          (item.likeCount || 0) * 0.4 +
-            (item.retweetCount || 0) * 0.8 +
-            (item.replyCount || 0) * 0.6 +
-            (item.quoteCount || 0) * 0.7,
+    return (json.tweets || [])
+      .slice(0, 20)
+      .map((item) => ({
+        title: (item.text || "").slice(0, 80) || "Twitter",
+        content: item.text || "",
+        url: item.url || "",
+        source: "twitter" as const,
+        sourceId: item.id,
+        publishedAt: normalizeDate(item.createdAt),
+        scoreHint: Math.min(
+          100,
+          Math.round(
+            (item.likeCount || 0) * 0.4 +
+              (item.retweetCount || 0) * 0.8 +
+              (item.replyCount || 0) * 0.6 +
+              (item.quoteCount || 0) * 0.7,
+          ),
         ),
-      ),
-    }));
+      }))
+      .filter((item) => isFresh(item.publishedAt));
   } catch {
     return [];
   }
@@ -267,6 +277,10 @@ function parseRssItems(xml: string, source: "google" | "bing", limit: number): C
     );
 
     if (!title || !link) {
+      continue;
+    }
+
+    if (!isFresh(publishedAt)) {
       continue;
     }
 
@@ -337,4 +351,29 @@ function normalizeDate(value?: string): string | undefined {
   }
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function isFresh(publishedAt?: string): boolean {
+  if (!publishedAt) {
+    return true;
+  }
+  const cutoff = daysAgo(MAX_AGE_DAYS).getTime();
+  const time = Date.parse(publishedAt);
+  if (Number.isNaN(time)) {
+    return true;
+  }
+  return time >= cutoff;
+}
+
+function daysAgo(days: number): Date {
+  const date = new Date();
+  date.setDate(date.getDate() - days);
+  return date;
+}
+
+function formatDateForQuery(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
