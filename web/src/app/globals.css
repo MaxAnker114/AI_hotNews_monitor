@@ -1,0 +1,66 @@
+@import "tailwindcss";
+
+:root {
+  --bg-0: #0b1220;
+  --bg-1: #111d32;
+  --ink: #f3f7ff;
+  --muted: #a7b5cf;
+  --line: #2a3c5f;
+  --accent: #f59e0b;
+  --accent-2: #22d3ee;
+  --card: #111a2d;
+}
+
+@theme inline {
+  --color-background: var(--bg-0);
+  --color-foreground: var(--ink);
+  --font-sans: var(--font-title);
+  --font-mono: var(--font-mono);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background:
+    radial-gradient(circle at 80% 10%, rgba(34, 211, 238, 0.18), transparent 34%),
+    radial-gradient(circle at 20% 0%, rgba(245, 158, 11, 0.18), transparent 25%),
+    linear-gradient(180deg, var(--bg-1) 0%, var(--bg-0) 62%);
+  color: var(--ink);
+  font-family: var(--font-title), "Segoe UI", sans-serif;
+}
+
+.mesh {
+  background-image:
+    linear-gradient(rgba(167, 181, 207, 0.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(167, 181, 207, 0.08) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+.glass {
+  background: color-mix(in oklab, var(--card) 78%, black 22%);
+  border: 1px solid color-mix(in oklab, var(--line) 72%, white 28%);
+  backdrop-filter: blur(12px);
+}
+
+.reveal {
+  animation: rise 520ms cubic-bezier(0.2, 0.7, 0.25, 1) both;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    animation: none;
+  }
+}
